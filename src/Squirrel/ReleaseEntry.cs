@@ -20,10 +20,11 @@ namespace Squirrel
         long Filesize { get; }
         bool IsDelta { get; }
         string EntryAsString { get; }
-        Version Version { get; }
+        SemanticVersion Version { get; }
         string PackageName { get; }
 
         string GetReleaseNotes(string packageDirectory);
+        Uri GetIconUrl(string packageDirectory);
     }
 
     [DataContract]
@@ -32,17 +33,18 @@ namespace Squirrel
         [DataMember] public string SHA1 { get; protected set; }
         [DataMember] public string BaseUrl { get; protected set; }
         [DataMember] public string Filename { get; protected set; }
+        [DataMember] public string Query { get; protected set; }
         [DataMember] public long Filesize { get; protected set; }
         [DataMember] public bool IsDelta { get; protected set; }
 
-        protected ReleaseEntry(string sha1, string filename, long filesize, bool isDelta, string baseUrl = null)
+        protected ReleaseEntry(string sha1, string filename, long filesize, bool isDelta, string baseUrl = null, string query = null)
         {
             Contract.Requires(sha1 != null && sha1.Length == 40);
             Contract.Requires(filename != null);
             Contract.Requires(filename.Contains(Path.DirectorySeparatorChar) == false);
             Contract.Requires(filesize > 0);
 
-            SHA1 = sha1; BaseUrl = baseUrl;  Filename = filename; Filesize = filesize; IsDelta = isDelta;
+            SHA1 = sha1; BaseUrl = baseUrl;  Filename = filename; Query = query; Filesize = filesize; IsDelta = isDelta;
         }
 
         [IgnoreDataMember]
@@ -51,7 +53,7 @@ namespace Squirrel
         }
 
         [IgnoreDataMember]
-        public Version Version { get { return Filename.ToVersion(); } }
+        public SemanticVersion Version { get { return Filename.ToSemanticVersion(); } }
 
         [IgnoreDataMember]
         public string PackageName {
@@ -68,6 +70,12 @@ namespace Squirrel
             }
 
             return zp.ReleaseNotes;
+        }
+
+        public Uri GetIconUrl(string packageDirectory)
+        {
+            var zp = new ZipPackage(Path.Combine(packageDirectory, Filename));
+            return zp.IconUrl;
         }
 
         static readonly Regex entryRegex = new Regex(@"^([0-9a-fA-F]{40})\s+(\S+)\s+(\d+)[\r]*$");
@@ -95,13 +103,25 @@ namespace Squirrel
             // Split the base URL and the filename if an URI is provided, 
             // throws if a path is provided
             string baseUrl = null;
+            string query = null;
 
             if(Utility.IsHttpUrl(filename)) {
-                var indexOfLastPathSeparator = filename.LastIndexOf("/") + 1;
+                var uri = new Uri(filename);
+                var path = uri.LocalPath;
+                var authority = uri.GetLeftPart(UriPartial.Authority);
 
-                baseUrl = filename.Substring(0, indexOfLastPathSeparator);
-                filename = filename.Substring(indexOfLastPathSeparator);
-            } 
+                if (String.IsNullOrEmpty(path) || String.IsNullOrEmpty(authority)) {
+                    throw new Exception("Invalid URL");
+                }
+
+                var indexOfLastPathSeparator = path.LastIndexOf("/") + 1;
+                baseUrl = authority + path.Substring(0, indexOfLastPathSeparator);
+                filename = path.Substring(indexOfLastPathSeparator);
+
+                if (!String.IsNullOrEmpty(uri.Query)) {
+                    query = uri.Query;
+                }
+            }
             
             if (filename.IndexOfAny(Path.GetInvalidFileNameChars()) > -1) {
                 throw new Exception("Filename can either be an absolute HTTP[s] URL, *or* a file name");
@@ -110,7 +130,7 @@ namespace Squirrel
             long size = Int64.Parse(m.Groups[3].Value);
             bool isDelta = filenameIsDeltaFile(filename);
 
-            return new ReleaseEntry(m.Groups[1].Value, filename, size, isDelta, baseUrl);
+            return new ReleaseEntry(m.Groups[1].Value, filename, size, isDelta, baseUrl, query);
         }
 
         public static IEnumerable<ReleaseEntry> ParseReleaseFile(string fileContents)
@@ -148,7 +168,7 @@ namespace Squirrel
             Contract.Requires(releaseEntries != null && releaseEntries.Any());
             Contract.Requires(!String.IsNullOrEmpty(path));
 
-            using (var f = File.OpenWrite(path)) {
+            using (var f = File.Open(path, FileMode.Create, FileAccess.Write, FileShare.None)) {
                 WriteReleaseFile(releaseEntries, f);
             }
         }
@@ -184,17 +204,24 @@ namespace Squirrel
             // Write the new RELEASES file to a temp file then move it into
             // place
             var entries = entriesQueue.ToList();
-            var tempFile = Path.GetTempFileName();
-            using (var of = File.OpenWrite(tempFile)) {
-                if (entries.Count > 0) WriteReleaseFile(entries, of);
+            var tempFile = default(string);
+            Utility.WithTempFile(out tempFile, releasePackagesDir);
+
+            try {
+                using (var of = File.OpenWrite(tempFile)) {
+                    if (entries.Count > 0) WriteReleaseFile(entries, of);
+                }
+
+                var target = Path.Combine(packagesDir.FullName, "RELEASES");
+                if (File.Exists(target)) {
+                    File.Delete(target);
+                }
+
+                File.Move(tempFile, target);
+            } finally {
+                if (File.Exists(tempFile)) Utility.DeleteFileHarder(tempFile, true);
             }
 
-            var target = Path.Combine(packagesDir.FullName, "RELEASES");
-            if (File.Exists(target)) {
-                File.Delete(target);
-            }
-
-            File.Move(tempFile, target);
             return entries;
         }
 
@@ -209,7 +236,7 @@ namespace Squirrel
 
             return releaseEntries
                 .Where(x => x.IsDelta == false)
-                .Where(x => x.Version < package.ToVersion())
+                .Where(x => x.Version < package.ToSemanticVersion())
                 .OrderByDescending(x => x.Version)
                 .Select(x => new ReleasePackage(Path.Combine(targetDir, x.Filename), true))
                 .FirstOrDefault();

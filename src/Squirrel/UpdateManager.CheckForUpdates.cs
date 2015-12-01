@@ -15,9 +15,6 @@ namespace Squirrel
         {
             readonly string rootAppDirectory;
 
-            // TODO: rip this out
-            readonly FrameworkVersion appFrameworkVersion = FrameworkVersion.Net45;
-
             public CheckForUpdateImpl(string rootAppDirectory)
             {
                 this.rootAppDirectory = rootAppDirectory;
@@ -47,6 +44,10 @@ namespace Squirrel
 
                 string releaseFile;
 
+                var latestLocalRelease = localReleases.Count() > 0 ? 
+                    localReleases.MaxBy(x => x.Version).First() : 
+                    default(ReleaseEntry);
+
                 // Fetch the remote RELEASES file, whether it's a local dir or an 
                 // HTTP URL
                 if (Utility.IsHttpUrl(updateUrlOrPath)) {
@@ -61,7 +62,17 @@ namespace Squirrel
                 retry:
 
                     try {
-                        var data = await urlDownloader.DownloadUrl(String.Format("{0}/{1}", updateUrlOrPath, "RELEASES"));
+                        var uri = Utility.AppendPathToUri(new Uri(updateUrlOrPath), "RELEASES");
+
+                        if (latestLocalRelease != null) {
+                            uri = Utility.AddQueryParamsToUri(uri, new Dictionary<string, string> {
+                                { "id", latestLocalRelease.PackageName },
+                                { "localVersion", latestLocalRelease.Version.ToString() },
+                                { "arch", Environment.Is64BitOperatingSystem ? "amd64" : "x86" }
+                            });
+                        }
+
+                        var data = await urlDownloader.DownloadUrl(uri.ToString());
                         releaseFile = Encoding.UTF8.GetString(data);
                     } catch (WebException ex) {
                         this.Log().InfoException("Download resulted in WebException (returning blank release list)", ex);
@@ -146,7 +157,7 @@ namespace Squirrel
                 if (latestFullRelease == currentRelease) {
                     this.Log().Info("No updates, remote and local are the same");
 
-                    var info = UpdateInfo.Create(currentRelease, new[] {latestFullRelease}, packageDirectory, appFrameworkVersion);
+                    var info = UpdateInfo.Create(currentRelease, new[] {latestFullRelease}, packageDirectory);
                     return info;
                 }
 
@@ -156,15 +167,15 @@ namespace Squirrel
 
                 if (!localReleases.Any()) {
                     this.Log().Warn("First run or local directory is corrupt, starting from scratch");
-                    return UpdateInfo.Create(Utility.FindCurrentVersion(localReleases), new[] {latestFullRelease}, packageDirectory, appFrameworkVersion);
+                    return UpdateInfo.Create(Utility.FindCurrentVersion(localReleases), new[] {latestFullRelease}, packageDirectory);
                 }
 
                 if (localReleases.Max(x => x.Version) > remoteReleases.Max(x => x.Version)) {
                     this.Log().Warn("hwhat, local version is greater than remote version");
-                    return UpdateInfo.Create(Utility.FindCurrentVersion(localReleases), new[] {latestFullRelease}, packageDirectory, appFrameworkVersion);
+                    return UpdateInfo.Create(Utility.FindCurrentVersion(localReleases), new[] {latestFullRelease}, packageDirectory);
                 }
 
-                return UpdateInfo.Create(currentRelease, remoteReleases, packageDirectory, appFrameworkVersion);
+                return UpdateInfo.Create(currentRelease, remoteReleases, packageDirectory);
             }
         }
     }

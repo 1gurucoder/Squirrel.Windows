@@ -15,6 +15,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
+using NuGet;
 
 namespace Squirrel
 {
@@ -115,6 +117,19 @@ namespace Squirrel
             }
         }
 
+        public static WebClient CreateWebClient()
+        {
+            // WHY DOESNT IT JUST DO THISSSSSSSS
+            var ret = new WebClient();
+            var wp = WebRequest.DefaultWebProxy;
+            if (wp != null) {
+                wp.Credentials = CredentialCache.DefaultCredentials;
+                ret.Proxy = wp;
+            }
+
+            return ret;
+        }
+
         public static async Task CopyToAsync(string from, string to)
         {
             Contract.Requires(!String.IsNullOrEmpty(from) && File.Exists(from));
@@ -162,22 +177,45 @@ namespace Squirrel
             }
         }
 
-        public static Task<int> InvokeProcessAsync(string fileName, string arguments)
+        public static Task<Tuple<int, string>> InvokeProcessAsync(string fileName, string arguments, CancellationToken ct)
         {
             var psi = new ProcessStartInfo(fileName, arguments);
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT && fileName.EndsWith (".exe", StringComparison.OrdinalIgnoreCase)) {
+                psi = new ProcessStartInfo("wine", fileName + " " + arguments);
+            }
+
             psi.UseShellExecute = false;
             psi.WindowStyle = ProcessWindowStyle.Hidden;
             psi.ErrorDialog = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
 
-            return InvokeProcessAsync(psi);
+            return InvokeProcessAsync(psi, ct);
         }
 
-        public static async Task<int> InvokeProcessAsync(ProcessStartInfo psi)
+        public static async Task<Tuple<int, string>> InvokeProcessAsync(ProcessStartInfo psi, CancellationToken ct)
         {
             var pi = Process.Start(psi);
+            await Task.Run(() => {
+                while (!ct.IsCancellationRequested) {
+                    if (pi.WaitForExit(2000)) return;
+                }
 
-            await Task.Run(() => pi.WaitForExit());
-            return pi.ExitCode;
+                if (ct.IsCancellationRequested) {
+                    pi.Kill();
+                    ct.ThrowIfCancellationRequested();
+                }
+            });
+
+            string textResult = await pi.StandardOutput.ReadToEndAsync();
+            if (String.IsNullOrWhiteSpace(textResult)) {
+                textResult = await pi.StandardError.ReadToEndAsync();
+                if (String.IsNullOrWhiteSpace(textResult)) {
+                    textResult = String.Empty;
+                }
+            }
+            return Tuple.Create(pi.ExitCode, textResult.Trim());
         }
 
         public static Task ForEachAsync<T>(this IEnumerable<T> source, Action<T> body, int degreeOfParallelism = 4)
@@ -196,24 +234,43 @@ namespace Squirrel
                 }));
         }
 
-        static string directoryChars;
-        public static IDisposable WithTempDirectory(out string path)
+        static Lazy<string> directoryChars = new Lazy<string>(() => {
+            return "abcdefghijklmnopqrstuvwxyz" +
+                Enumerable.Range(0x03B0, 0x03FF - 0x03B0)   // Greek and Coptic
+                    .Concat(Enumerable.Range(0x0400, 0x04FF - 0x0400)) // Cyrillic
+                    .Aggregate(new StringBuilder(), (acc, x) => { acc.Append(Char.ConvertFromUtf32(x)); return acc; })
+                    .ToString();
+        });
+
+        internal static string tempNameForIndex(int index, string prefix)
         {
-            var di = new DirectoryInfo(Environment.GetEnvironmentVariable("SQUIRREL_TEMP") ?? Environment.GetEnvironmentVariable("TEMP") ?? "");
-            if (!di.Exists) {
-                throw new Exception("%TEMP% isn't defined, go set it");
+            if (index < directoryChars.Value.Length) {
+                return prefix + directoryChars.Value[index];
             }
 
+            return prefix + directoryChars.Value[index % directoryChars.Value.Length] + tempNameForIndex(index / directoryChars.Value.Length, "");
+        }
+
+        public static DirectoryInfo GetTempDirectory(string localAppDirectory)
+        {
+            var tempDir = Environment.GetEnvironmentVariable("SQUIRREL_TEMP");
+            tempDir = tempDir ?? Path.Combine(localAppDirectory ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SquirrelTemp");
+
+            var di = new DirectoryInfo(tempDir);
+            if (!di.Exists) di.Create();
+
+            return di;
+        }
+
+        public static IDisposable WithTempDirectory(out string path, string localAppDirectory = null)
+        {
+            var di = GetTempDirectory(localAppDirectory);
             var tempDir = default(DirectoryInfo);
 
-            directoryChars = directoryChars ?? (
-                "abcdefghijklmnopqrstuvwxyz" +
-                Enumerable.Range(0x4E00, 0x9FCC - 0x4E00)  // CJK UNIFIED IDEOGRAPHS
-                    .Aggregate(new StringBuilder(), (acc, x) => { acc.Append(Char.ConvertFromUtf32(x)); return acc; })
-                    .ToString());
+            var names = Enumerable.Range(0, 1<<20).Select(x => tempNameForIndex(x, "temp"));
 
-            foreach (var c in directoryChars) {
-                var target = Path.Combine(di.FullName, c.ToString());
+            foreach (var name in names) {
+                var target = Path.Combine(di.FullName, name);
 
                 if (!File.Exists(target) && !Directory.Exists(target)) {
                     Directory.CreateDirectory(target);
@@ -224,15 +281,32 @@ namespace Squirrel
 
             path = tempDir.FullName;
 
-            return Disposable.Create(() =>
-                DeleteDirectory(tempDir.FullName).Wait());
+            return Disposable.Create(() => Task.Run(async () => await DeleteDirectory(tempDir.FullName)).Wait());
+        }
+
+        public static IDisposable WithTempFile(out string path, string localAppDirectory = null)
+        {
+            var di = GetTempDirectory(localAppDirectory);
+            var names = Enumerable.Range(0, 1<<20).Select(x => tempNameForIndex(x, "temp"));
+
+            path = "";
+            foreach (var name in names) {
+                path = Path.Combine(di.FullName, name);
+
+                if (!File.Exists(path) && !Directory.Exists(path)) {
+                    break;
+                }
+            }
+
+            var thePath = path;
+            return Disposable.Create(() => File.Delete(thePath));
         }
 
         public static async Task DeleteDirectory(string directoryPath)
         {
             Contract.Requires(!String.IsNullOrEmpty(directoryPath));
 
-            Log().Info("Starting to delete folder: {0}", directoryPath);
+            Log().Debug("Starting to delete folder: {0}", directoryPath);
 
             if (!Directory.Exists(directoryPath)) {
                 Log().Warn("DeleteDirectory: does not exist - {0}", directoryPath);
@@ -277,15 +351,14 @@ namespace Squirrel
             }
         }
 
-        public static Tuple<string, Stream> CreateTempFile()
-        {
-            var path = Path.GetTempFileName();
-            return Tuple.Create(path, (Stream) File.OpenWrite(path));
-        }
-
         public static string AppDirForRelease(string rootAppDirectory, ReleaseEntry entry)
         {
             return Path.Combine(rootAppDirectory, "app-" + entry.Version.ToString());
+        }
+
+        public static string AppDirForVersion(string rootAppDirectory, SemanticVersion version)
+        {
+            return Path.Combine(rootAppDirectory, "app-" + version.ToString());
         }
 
         public static string PackageDirectoryForAppDir(string rootAppDirectory) 
@@ -339,42 +412,55 @@ namespace Squirrel
             return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
         }
 
-        public static async Task DeleteDirectoryWithFallbackToNextReboot(string dir)
+        public static Uri AppendPathToUri(Uri uri, string path)
+        {
+            var builder = new UriBuilder(uri);
+            if (!builder.Path.EndsWith("/")) {
+                builder.Path += "/";
+            }
+
+            builder.Path += path;
+            return builder.Uri;
+        }
+
+        public static Uri EnsureTrailingSlash(Uri uri)
+        {
+            return AppendPathToUri(uri, "");
+        }
+
+        public static Uri AddQueryParamsToUri(Uri uri, IEnumerable<KeyValuePair<string, string>> newQuery)
+        {
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+            foreach (var entry in newQuery) {
+                query[entry.Key] = entry.Value;
+            }
+
+            var builder = new UriBuilder(uri);
+            builder.Query = query.ToString();
+
+            return builder.Uri;
+        }
+
+        public static void DeleteFileHarder(string path, bool ignoreIfFails = false)
+        {
+            try {
+                Retry(() => File.Delete(path), 2);
+            } catch (Exception ex) {
+                if (ignoreIfFails) return;
+
+                LogHost.Default.ErrorException("Really couldn't delete file: " + path, ex);
+                throw;
+            }
+        }
+
+        public static async Task DeleteDirectoryOrJustGiveUp(string dir)
         {
             try {
                 await Utility.DeleteDirectory(dir);
             } catch (Exception ex) {
-                var message = String.Format("Uninstall failed to delete dir '{0}', punting to next reboot", dir);
-                LogHost.Default.WarnException(message, ex);
-
-                Utility.DeleteDirectoryAtNextReboot(dir);
+                var message = String.Format("Uninstall failed to delete dir '{0}'", dir);
             }
-        }
-
-        public static void DeleteDirectoryAtNextReboot(string directoryPath)
-        {
-            var di = new DirectoryInfo(directoryPath);
-
-            if (!di.Exists) {
-                Log().Warn("DeleteDirectoryAtNextReboot: does not exist - {0}", directoryPath);
-                return;
-            }
-
-            // NB: MoveFileEx blows up if you're a non-admin, so you always need a backup plan
-            di.GetFiles().ForEach(x => safeDeleteFileAtNextReboot(x.FullName));
-            di.GetDirectories().ForEach(x => DeleteDirectoryAtNextReboot(x.FullName));
-
-            safeDeleteFileAtNextReboot(directoryPath);
-        }
-
-        static void safeDeleteFileAtNextReboot(string name)
-        {
-            if (MoveFileEx(name, null, MoveFileFlags.MOVEFILE_DELAY_UNTIL_REBOOT)) return;
-
-            // Thank You, http://www.pinvoke.net/default.aspx/coredll.getlasterror
-            var lastError = Marshal.GetLastWin32Error();
-
-            Log().Error("safeDeleteFileAtNextReboot: failed - {0} - {1}", name, lastError);
         }
 
         public static void LogIfThrows(this IFullLogger This, LogLevel level, string message, Action block)
@@ -532,7 +618,7 @@ namespace Squirrel
                 throw new Exception("Couldn't acquire lock, is another instance running");
             }
 
-            var handle = Disposable.Create(() => {
+            handle = Disposable.Create(() => {
                 fh.Dispose();
                 File.Delete(path);
             });

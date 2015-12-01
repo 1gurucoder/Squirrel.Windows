@@ -7,6 +7,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ICSharpCode.SharpZipLib.Zip;
 using Splat;
+using DeltaCompressionDotNet.MsDelta;
+using System.ComponentModel;
+using Squirrel.Bsdiff;
 
 namespace Squirrel
 {
@@ -18,6 +21,12 @@ namespace Squirrel
 
     public class DeltaPackageBuilder : IEnableLogger, IDeltaPackageBuilder
     {
+        readonly string localAppDirectory;
+        public DeltaPackageBuilder(string localAppDataOverride = null)
+        {
+            this.localAppDirectory = localAppDataOverride;
+        }
+
         public ReleasePackage CreateDeltaPackage(ReleasePackage basePackage, ReleasePackage newPackage, string outputFile)
         {
             Contract.Requires(basePackage != null);
@@ -46,8 +55,8 @@ namespace Squirrel
             string baseTempPath = null;
             string tempPath = null;
 
-            using (Utility.WithTempDirectory(out baseTempPath))
-            using (Utility.WithTempDirectory(out tempPath)) {
+            using (Utility.WithTempDirectory(out baseTempPath, null))
+            using (Utility.WithTempDirectory(out tempPath, null)) {
                 var baseTempInfo = new DirectoryInfo(baseTempPath);
                 var tempInfo = new DirectoryInfo(tempPath);
 
@@ -87,8 +96,8 @@ namespace Squirrel
             string workingPath;
             string deltaPath;
 
-            using (Utility.WithTempDirectory(out deltaPath))
-            using (Utility.WithTempDirectory(out workingPath)) {
+            using (Utility.WithTempDirectory(out deltaPath, localAppDirectory))
+            using (Utility.WithTempDirectory(out workingPath, localAppDirectory)) {
                 var fz = new FastZip();
                 fz.ExtractZip(deltaPackage.InputPackageFile, deltaPath, null);
                 fz.ExtractZip(basePackage.InputPackageFile, workingPath, null);
@@ -102,8 +111,11 @@ namespace Squirrel
                 // Apply all of the .diff files
                 deltaPathRelativePaths
                     .Where(x => x.StartsWith("lib", StringComparison.InvariantCultureIgnoreCase))
+                    .Where(x => !x.EndsWith(".shasum", StringComparison.InvariantCultureIgnoreCase))
+                    .Where(x => !x.EndsWith(".diff", StringComparison.InvariantCultureIgnoreCase) ||
+                                !deltaPathRelativePaths.Contains(x.Replace(".diff", ".bsdiff")))
                     .ForEach(file => {
-                        pathsVisited.Add(Regex.Replace(file, @".diff$", "").ToLowerInvariant());
+                        pathsVisited.Add(Regex.Replace(file, @"\.(bs)?diff$", "").ToLowerInvariant());
                         applyDiffToFile(deltaPath, file, workingPath);
                     });
 
@@ -164,61 +176,87 @@ namespace Squirrel
             }
 
             this.Log().Info("Delta patching {0} => {1}", baseFileListing[relativePath], targetFile.FullName);
-            using (var of = File.Create(targetFile.FullName + ".diff")) {
-                BinaryPatchUtility.Create(oldData, newData, of);
+            var msDelta = new MsDeltaCompression();
+            try {
+                msDelta.CreateDelta(baseFileListing[relativePath], targetFile.FullName, targetFile.FullName + ".diff");
+            } catch (Win32Exception) {
+                this.Log().Warn("We couldn't create a delta for {0}, attempting to create bsdiff", targetFile.Name);
 
-                var rl = ReleaseEntry.GenerateFromFile(new MemoryStream(newData), targetFile.Name + ".shasum");
-                File.WriteAllText(targetFile.FullName + ".shasum", rl.EntryAsString, Encoding.UTF8);
-                targetFile.Delete();
+                var of = default(FileStream);
+                try {
+                    of = File.Create(targetFile.FullName + ".bsdiff");
+                    BinaryPatchUtility.Create(oldData, newData, of);
+
+                    // NB: Create a dummy corrupt .diff file so that older 
+                    // versions which don't understand bsdiff will fail out
+                    // until they get upgraded, instead of seeing the missing
+                    // file and just removing it.
+                    File.WriteAllText(targetFile.FullName + ".diff", "1");
+                } catch (Exception ex) {
+                    this.Log().WarnException(String.Format("We really couldn't create a delta for {0}", targetFile.Name), ex);
+                    return;
+                } finally {
+                    if (of != null) of.Dispose();
+                }
             }
+
+            var rl = ReleaseEntry.GenerateFromFile(new MemoryStream(newData), targetFile.Name + ".shasum");
+            File.WriteAllText(targetFile.FullName + ".shasum", rl.EntryAsString, Encoding.UTF8);
+            targetFile.Delete();
         }
 
 
         void applyDiffToFile(string deltaPath, string relativeFilePath, string workingDirectory)
         {
             var inputFile = Path.Combine(deltaPath, relativeFilePath);
-            var finalTarget = Path.Combine(workingDirectory, Regex.Replace(relativeFilePath, @".diff$", ""));
+            var finalTarget = Path.Combine(workingDirectory, Regex.Replace(relativeFilePath, @"\.(bs)?diff$", ""));
 
-            var tempTargetFile = Path.GetTempFileName();
+            var tempTargetFile = default(string);
+            Utility.WithTempFile(out tempTargetFile, localAppDirectory);
 
-            // NB: Zero-length diffs indicate the file hasn't actually changed
-            if (new FileInfo(inputFile).Length == 0) {
-                this.Log().Info("{0} exists unchanged, skipping", relativeFilePath);
-                return;
-            }
-
-            if (relativeFilePath.EndsWith(".diff", StringComparison.InvariantCultureIgnoreCase)) {
-                using (var of = File.OpenWrite(tempTargetFile))
-                using (var inf = File.OpenRead(finalTarget)) {
-                    this.Log().Info("Applying Diff to {0}", relativeFilePath);
-                    BinaryPatchUtility.Apply(inf, () => File.OpenRead(inputFile), of);
+            try {
+                // NB: Zero-length diffs indicate the file hasn't actually changed
+                if (new FileInfo(inputFile).Length == 0) {
+                    this.Log().Info("{0} exists unchanged, skipping", relativeFilePath);
+                    return;
                 }
 
-                try {
+                 if (relativeFilePath.EndsWith(".bsdiff", StringComparison.InvariantCultureIgnoreCase)) {
+                    using (var of = File.OpenWrite(tempTargetFile))
+                    using (var inf = File.OpenRead(finalTarget)) {
+                        this.Log().Info("Applying BSDiff to {0}", relativeFilePath);
+                        BinaryPatchUtility.Apply(inf, () => File.OpenRead(inputFile), of);
+                    }
+
                     verifyPatchedFile(relativeFilePath, inputFile, tempTargetFile);
-                } catch (Exception) {
-                    File.Delete(tempTargetFile);
-                    throw;
+                 } else if (relativeFilePath.EndsWith(".diff", StringComparison.InvariantCultureIgnoreCase)) {
+                    this.Log().Info("Applying MSDiff to {0}", relativeFilePath);
+                    var msDelta = new MsDeltaCompression();
+                    msDelta.ApplyDelta(inputFile, finalTarget, tempTargetFile);
+
+                    verifyPatchedFile(relativeFilePath, inputFile, tempTargetFile);
+                } else {
+                    using (var of = File.OpenWrite(tempTargetFile))
+                    using (var inf = File.OpenRead(inputFile)) {
+                        this.Log().Info("Adding new file: {0}", relativeFilePath);
+                        inf.CopyTo(of);
+                    }
                 }
-            } else {
-                using (var of = File.OpenWrite(tempTargetFile))
-                using (var inf = File.OpenRead(inputFile)) {
-                    this.Log().Info("Adding new file: {0}", relativeFilePath);
-                    inf.CopyTo(of);
-                }
+
+                if (File.Exists(finalTarget)) File.Delete(finalTarget);
+
+                var targetPath = Directory.GetParent(finalTarget);
+                if (!targetPath.Exists) targetPath.Create();
+
+                File.Move(tempTargetFile, finalTarget);
+            } finally {
+                if (File.Exists(tempTargetFile)) Utility.DeleteFileHarder(tempTargetFile, true);
             }
-
-            if (File.Exists(finalTarget)) File.Delete(finalTarget);
-
-            var targetPath = Directory.GetParent(finalTarget);
-            if (!targetPath.Exists) targetPath.Create();
-
-            File.Move(tempTargetFile, finalTarget);
         }
 
         void verifyPatchedFile(string relativeFilePath, string inputFile, string tempTargetFile)
         {
-            var shaFile = Regex.Replace(inputFile, @"\.diff$", ".shasum");
+            var shaFile = Regex.Replace(inputFile, @"\.(bs)?diff$", ".shasum");
             var expectedReleaseEntry = ReleaseEntry.ParseReleaseEntry(File.ReadAllText(shaFile, Encoding.UTF8));
             var actualReleaseEntry = ReleaseEntry.GenerateFromFile(tempTargetFile);
 

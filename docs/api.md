@@ -7,13 +7,25 @@ This is the assembly your project should reference in order to use Squirrel in-a
 Main entry point for using Squirrel functionality. Here's an example of how to create one:
 
 ```cs
-using (var mgr = new UpdateManager(
-    @"http://your-server/releases", "your-nuget-package-id",
-    FrameworkVersion.Net45))
+using (var mgr = new UpdateManager("http://your-server/releases"))
 {
     // Use updateManager
 }
 ```
+
+### GitHub UpdateManager
+
+To use GitHub Releases as the location where your application updates are hosted:  
+
+```cs
+var updateManager = UpdateManager.GitHubUpdateManager('https://github.com/myuser/myrepo');
+
+// or to include pre-releases
+
+var updateManager = UpdateManager.GitHubUpdateManager('https://github.com/myuser/myrepo', prerelease: true);
+```
+
+Issue #442 contains a brief explanation of how this works.
 
 ### Methods for managing updates
 
@@ -21,7 +33,7 @@ These methods are the primary methods you'll use to interact with app updates an
 
 * `UpdateApp`: Downloads and updates the app to the latest version. This method is the "Easy Mode" method that does everything all in one go.
 
-* `CheckForUpdate`: Checks on the server if there are updates available. Returns an `UpdateInfo` object that contains information about pending updates if there are any, and null if there aren't.
+* `CheckForUpdate`: Checks on the server if there are updates available. Returns an `UpdateInfo` object that contains information about any pending updates.
 
 * `DownloadReleases`: Downloads release files (the `nupkg` file deltas) from the server to the local machine
 

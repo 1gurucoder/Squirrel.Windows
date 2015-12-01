@@ -75,18 +75,16 @@ And `ReleaseEntry` contains the specifics of each release:
 First, check the location where your application updates are hosted:
 
 ```cs
-var updateManager = new UpdateManager(@"C:\Users\brendanforster\Desktop\TestApp",
-                                     "TestApp",
-                                     FrameworkVersion.Net40);
+var updateManager = new UpdateManager(@"C:\Users\brendanforster\Desktop\TestApp");
 
 var updateInfo = await updateManager.CheckForUpdate();
 
 if (updateInfo == null) {
     Console.WriteLine("No updates found");
-} else if (!info.ReleasesToApply.Any()) {
+} else if (!updateInfo.ReleasesToApply.Any()) {
         Console.WriteLine("You're up to date!");
 } else {
-    var latest = info.ReleasesToApply.MaxBy(x => x.Version).First();
+    var latest = updateInfo.ReleasesToApply.MaxBy(x => x.Version).First();
     Console.WriteLine("You can update to {0}", latest.Version);
 }
 ```

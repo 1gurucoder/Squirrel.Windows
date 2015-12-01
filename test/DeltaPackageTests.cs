@@ -31,16 +31,38 @@ namespace Squirrel.Tests.Core
                 result.Version.ShouldEqual(expected.Version);
 
                 this.Log().Info("Expected file list:");
-                expected.GetFiles().Select(x => x.Path).OrderBy(x => x).ForEach(x => this.Log().Info(x));
+                var expectedList = expected.GetFiles().Select(x => x.Path).OrderBy(x => x).ToList();
+                expectedList.ForEach(x => this.Log().Info(x));
 
                 this.Log().Info("Actual file list:");
-                result.GetFiles().Select(x => x.Path).OrderBy(x => x).ForEach(x => this.Log().Info(x));
+                var actualList = result.GetFiles().Select(x => x.Path).OrderBy(x => x).ToList();
+                actualList.ForEach(x => this.Log().Info(x));
 
-                Enumerable.Zip(
-                    expected.GetFiles().Select(x => x.Path).OrderBy(x => x),
-                    result.GetFiles().Select(x => x.Path).OrderBy(x => x),
-                    (e, a) => e == a
-                    ).All(x => x).ShouldBeTrue();
+                Enumerable.Zip(expectedList, actualList, (e, a) => e == a)
+                    .All(x => x != false)
+                    .ShouldBeTrue();
+            } finally {
+                if (File.Exists(outFile)) {
+                    File.Delete(outFile);
+                }
+            }
+        }
+
+        [Fact]
+        public void ApplyDeltaWithBothBsdiffAndNormalDiffDoesntFail()
+        {
+            var basePackage = new ReleasePackage(IntegrationTestHelper.GetPath("fixtures", "slack-1.1.8-full.nupkg"));
+            var deltaPackage = new ReleasePackage(IntegrationTestHelper.GetPath("fixtures", "slack-1.2.0-delta.nupkg"));
+            var outFile = Path.GetTempFileName() + ".nupkg";
+
+            try {
+                var deltaBuilder = new DeltaPackageBuilder();
+                deltaBuilder.ApplyDeltaPackage(basePackage, deltaPackage, outFile);
+
+                var result = new ZipPackage(outFile);
+
+                result.Id.ShouldEqual("slack");
+                result.Version.ShouldEqual(new SemanticVersion("1.2.0"));
             } finally {
                 if (File.Exists(outFile)) {
                     File.Delete(outFile);

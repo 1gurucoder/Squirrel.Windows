@@ -22,7 +22,7 @@ namespace Squirrel.Tests
             return Task.FromResult(new byte[0]);
         }
 
-        public async Task DownloadFile(string url, string targetFile)
+        public async Task DownloadFile(string url, string targetFile, Action<int> progress)
         {
         }
     }
@@ -41,7 +41,7 @@ namespace Squirrel.Tests
                 var pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.FullInstall();
 
                     // NB: We execute the Squirrel-aware apps, so we need to give
@@ -70,7 +70,7 @@ namespace Squirrel.Tests
                 var pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.FullInstall();
                 }
 
@@ -80,7 +80,7 @@ namespace Squirrel.Tests
                 pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.UpdateApp();
                 }
 
@@ -106,7 +106,7 @@ namespace Squirrel.Tests
                 var pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.FullInstall();
                 }
 
@@ -116,14 +116,14 @@ namespace Squirrel.Tests
                 pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.UpdateApp();
                 }
 
                 await Task.Delay(1000);
 
                 // NB: The 2nd time we won't have any updates to apply. We should just do nothing!
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.UpdateApp();
                 }
 
@@ -143,7 +143,7 @@ namespace Squirrel.Tests
                 var pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.FullInstall();
                 }
 
@@ -153,13 +153,13 @@ namespace Squirrel.Tests
                 pkgs = ReleaseEntry.BuildReleasesFile(remotePkgDir);
                 ReleaseEntry.WriteReleaseFile(pkgs, Path.Combine(remotePkgDir, "RELEASES"));
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.UpdateApp();
                 }
 
                 await Task.Delay(1000);
 
-                using (var fixture = new UpdateManager(remotePkgDir, "theApp", FrameworkVersion.Net45, tempDir)) {
+                using (var fixture = new UpdateManager(remotePkgDir, "theApp", tempDir)) {
                     await fixture.FullUninstall();
                 }
 
@@ -184,7 +184,7 @@ namespace Squirrel.Tests
                 var aGivenPackage = Path.Combine(packages, package);
                 var baseEntry = ReleaseEntry.GenerateFromFile(aGivenPackage);
 
-                var updateInfo = UpdateInfo.Create(baseEntry, new[] { baseEntry }, "dontcare", FrameworkVersion.Net40);
+                var updateInfo = UpdateInfo.Create(baseEntry, new[] { baseEntry }, "dontcare");
 
                 Assert.Empty(updateInfo.ReleasesToApply);
             }
@@ -213,7 +213,7 @@ namespace Squirrel.Tests
                 var deltaEntry = ReleaseEntry.GenerateFromFile(deltaPackage);
 
                 Assert.Throws<Exception>(
-                    () => UpdateInfo.Create(baseEntry, new[] { deltaEntry }, "dontcare", FrameworkVersion.Net40));
+                    () => UpdateInfo.Create(baseEntry, new[] { deltaEntry }, "dontcare"));
             }
         }
 
@@ -232,12 +232,12 @@ namespace Squirrel.Tests
                     "Squirrel.Core.1.1.0.0-full.nupkg",
                 }.ForEach(x => File.Copy(IntegrationTestHelper.GetPath("fixtures", x), Path.Combine(packagesDir, x)));
 
-                var fixture = new UpdateManager.ApplyReleasesImpl("theApp", appDir);
+                var fixture = new UpdateManager.ApplyReleasesImpl(appDir);
 
                 var baseEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.0.0.0-full.nupkg"));
                 var latestFullEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.1.0.0-full.nupkg"));
 
-                var updateInfo = UpdateInfo.Create(baseEntry, new[] { latestFullEntry }, packagesDir, FrameworkVersion.Net40);
+                var updateInfo = UpdateInfo.Create(baseEntry, new[] { latestFullEntry }, packagesDir);
                 updateInfo.ReleasesToApply.Contains(latestFullEntry).ShouldBeTrue();
 
                 var progress = new List<int>();
@@ -252,7 +252,6 @@ namespace Squirrel.Tests
                 var filesToFind = new[] {
                     new {Name = "NLog.dll", Version = new Version("2.0.0.0")},
                     new {Name = "NSync.Core.dll", Version = new Version("1.1.0.0")},
-                    new {Name = Path.Combine("sub", "Ionic.Zip.dll"), Version = new Version("1.9.1.8")},
                 };
 
                 filesToFind.ForEach(x => {
@@ -282,12 +281,12 @@ namespace Squirrel.Tests
                     "Squirrel.Core.1.2.0.0-full.nupkg",
                 }.ForEach(x => File.Copy(IntegrationTestHelper.GetPath("fixtures", x), Path.Combine(packagesDir, x)));
 
-                var fixture = new UpdateManager.ApplyReleasesImpl("theApp", appDir);
+                var fixture = new UpdateManager.ApplyReleasesImpl(appDir);
 
                 var baseEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.1.0.0-full.nupkg"));
                 var latestFullEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.2.0.0-full.nupkg"));
 
-                var updateInfo = UpdateInfo.Create(baseEntry, new[] { latestFullEntry }, packagesDir, FrameworkVersion.Net40);
+                var updateInfo = UpdateInfo.Create(baseEntry, new[] { latestFullEntry }, packagesDir);
                 updateInfo.ReleasesToApply.Contains(latestFullEntry).ShouldBeTrue();
 
                 var progress = new List<int>();
@@ -331,12 +330,12 @@ namespace Squirrel.Tests
                     "Squirrel.Core.1.3.0.0-full.nupkg",
                 }.ForEach(x => File.Copy(IntegrationTestHelper.GetPath("fixtures", x), Path.Combine(packagesDir, x)));
 
-                var fixture = new UpdateManager.ApplyReleasesImpl("theApp", appDir);
+                var fixture = new UpdateManager.ApplyReleasesImpl(appDir);
 
                 var baseEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.1.0.0-full.nupkg"));
                 var latestFullEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.3.0.0-full.nupkg"));
 
-                var updateInfo = UpdateInfo.Create(baseEntry, new[] { latestFullEntry }, packagesDir, FrameworkVersion.Net40);
+                var updateInfo = UpdateInfo.Create(baseEntry, new[] { latestFullEntry }, packagesDir);
                 updateInfo.ReleasesToApply.Contains(latestFullEntry).ShouldBeTrue();
 
                 var progress = new List<int>();
@@ -382,13 +381,13 @@ namespace Squirrel.Tests
                     "Squirrel.Core.1.1.0.0-full.nupkg",
                 }.ForEach(x => File.Copy(IntegrationTestHelper.GetPath("fixtures", x), Path.Combine(packagesDir, x)));
 
-                var fixture = new UpdateManager.ApplyReleasesImpl("theApp", appDir);
+                var fixture = new UpdateManager.ApplyReleasesImpl(appDir);
 
                 var baseEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.0.0.0-full.nupkg"));
                 var deltaEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.1.0.0-delta.nupkg"));
                 var latestFullEntry = ReleaseEntry.GenerateFromFile(Path.Combine(packagesDir, "Squirrel.Core.1.1.0.0-full.nupkg"));
 
-                var updateInfo = UpdateInfo.Create(baseEntry, new[] { deltaEntry, latestFullEntry }, packagesDir, FrameworkVersion.Net40);
+                var updateInfo = UpdateInfo.Create(baseEntry, new[] { deltaEntry, latestFullEntry }, packagesDir);
                 updateInfo.ReleasesToApply.Contains(deltaEntry).ShouldBeTrue();
 
                 var progress = new List<int>();
@@ -403,7 +402,6 @@ namespace Squirrel.Tests
                 var filesToFind = new[] {
                     new {Name = "NLog.dll", Version = new Version("2.0.0.0")},
                     new {Name = "NSync.Core.dll", Version = new Version("1.1.0.0")},
-                    new {Name = Path.Combine("sub", "Ionic.Zip.dll"), Version = new Version("1.9.1.8")},
                 };
 
                 filesToFind.ForEach(x => {
@@ -433,7 +431,7 @@ namespace Squirrel.Tests
                 }.ForEach(x => File.Copy(IntegrationTestHelper.GetPath("fixtures", x), Path.Combine(tempDir, "theApp", "packages", x)));
 
                 var urlDownloader = new FakeUrlDownloader();
-                var fixture = new UpdateManager.ApplyReleasesImpl("theApp", appDir);
+                var fixture = new UpdateManager.ApplyReleasesImpl(appDir);
 
                 var baseEntry = ReleaseEntry.GenerateFromFile(Path.Combine(tempDir, "theApp", "packages", "Squirrel.Core.1.0.0.0-full.nupkg"));
                 var deltaEntry = ReleaseEntry.GenerateFromFile(Path.Combine(tempDir, "theApp", "packages", "Squirrel.Core.1.1.0.0-delta.nupkg"));
@@ -455,17 +453,52 @@ namespace Squirrel.Tests
 
             using (Utility.WithTempDirectory(out path)) {
                 using (Utility.WithTempDirectory(out remotePkgPath))
-                using (var mgr = new UpdateManager(remotePkgPath, "theApp", FrameworkVersion.Net45, path)) {
+                using (var mgr = new UpdateManager(remotePkgPath, "theApp", path)) {
                     IntegrationTestHelper.CreateFakeInstalledApp("1.0.0.1", remotePkgPath);
                     await mgr.FullInstall();
                 }
 
-                var fixture = new UpdateManager.ApplyReleasesImpl("theApp", Path.Combine(path, "theApp"));
-                fixture.CreateShortcutsForExecutable("SquirrelAwareApp.exe", ShortcutLocation.Desktop | ShortcutLocation.StartMenu, false);
+                var fixture = new UpdateManager.ApplyReleasesImpl(Path.Combine(path, "theApp"));
+                fixture.CreateShortcutsForExecutable("SquirrelAwareApp.exe", ShortcutLocation.Desktop | ShortcutLocation.StartMenu | ShortcutLocation.Startup | ShortcutLocation.AppRoot, false, null, null);
 
                 // NB: COM is Weird.
                 Thread.Sleep(1000);
-                fixture.RemoveShortcutsForExecutable("SquirrelAwareApp.exe", ShortcutLocation.Desktop | ShortcutLocation.StartMenu);
+                fixture.RemoveShortcutsForExecutable("SquirrelAwareApp.exe", ShortcutLocation.Desktop | ShortcutLocation.StartMenu | ShortcutLocation.Startup | ShortcutLocation.AppRoot);
+
+                // NB: Squirrel-Aware first-run might still be running, slow
+                // our roll before blowing away the temp path
+                Thread.Sleep(1000);
+            }
+        }
+        
+        [Fact]
+        public void UnshimOurselvesSmokeTest()
+        {
+            // NB: This smoke test is really more of a manual test - try it
+            // by shimming Slack, then verifying the shim goes away
+            var appDir = Environment.ExpandEnvironmentVariables(@"%LocalAppData%\Slack");
+            var fixture = new UpdateManager.ApplyReleasesImpl(appDir);
+
+            fixture.unshimOurselves();
+        }
+
+        [Fact]
+        public async Task GetShortcutsSmokeTest()
+        {
+            string remotePkgPath;
+            string path;
+
+            using (Utility.WithTempDirectory(out path)) {
+                using (Utility.WithTempDirectory(out remotePkgPath))
+                using (var mgr = new UpdateManager(remotePkgPath, "theApp", path)) {
+                    IntegrationTestHelper.CreateFakeInstalledApp("1.0.0.1", remotePkgPath);
+                    await mgr.FullInstall();
+                }
+
+                var fixture = new UpdateManager.ApplyReleasesImpl(Path.Combine(path, "theApp"));
+                var result = fixture.GetShortcutsForExecutable("SquirrelAwareApp.exe", ShortcutLocation.Desktop | ShortcutLocation.StartMenu | ShortcutLocation.Startup, null);
+
+                Assert.Equal(3, result.Keys.Count);
 
                 // NB: Squirrel-Aware first-run might still be running, slow
                 // our roll before blowing away the temp path

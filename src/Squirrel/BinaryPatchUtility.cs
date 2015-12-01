@@ -7,7 +7,7 @@ using ICSharpCode.SharpZipLib.BZip2;
 
 // Adapted from https://github.com/LogosBible/bsdiff.net/blob/master/src/bsdiff/BinaryPatchUtility.cs
 
-namespace Squirrel
+namespace Squirrel.Bsdiff
 {
     /*
     The original bsdiff.c source code (http://www.daemonology.net/bsdiff/) is
@@ -52,10 +52,14 @@ namespace Squirrel
             // solve it, just buys us more space. The solution is to rewrite Split
             // using iteration instead of recursion, but that's Hard(tm).
             var ex = default(Exception);
-            var t = new Thread(() => {
-                try {
+            var t = new Thread(() =>
+            {
+                try
+                {
                     CreateInternal(oldData, newData, output);
-                } catch (Exception exc) {
+                }
+                catch (Exception exc)
+                {
                     ex = exc;
                 }
             }, 40 * 1048576);
@@ -196,7 +200,7 @@ namespace Squirrel
                         }
 
                         for (int i = 0; i < lenf; i++)
-                            db[dblen + i] = (byte) (newData[lastscan + i] - oldData[lastpos + i]);
+                            db[dblen + i] = (byte)(newData[lastscan + i] - oldData[lastpos + i]);
                         for (int i = 0; i < (scan - lenb) - (lastscan + lenf); i++)
                             eb[eblen + i] = newData[lastscan + lenf + i];
 
@@ -689,7 +693,7 @@ namespace Squirrel
         /// </summary>
         public override long Length
         {
-            get { ThrowIfDisposed();  return m_streamBase.Length; }
+            get { ThrowIfDisposed(); return m_streamBase.Length; }
         }
 
         /// <summary>

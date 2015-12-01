@@ -8,13 +8,19 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 using Splat;
+using NuGet;
 
 namespace Squirrel
 {
     [Flags]
     public enum ShortcutLocation {
-        StartMenu = 1<<0,
-        Desktop = 1<<1,
+        StartMenu = 1 << 0,
+        Desktop = 1 << 1,
+        Startup = 1 << 2,
+        /// <summary>
+        /// A shortcut in the application folder, useful for portable applications.
+        /// </summary>
+        AppRoot = 1 << 3
     }
 
     public interface IUpdateManager : IDisposable, IEnableLogger
@@ -60,8 +66,10 @@ namespace Squirrel
         /// Completely Installs a targeted app
         /// </summary>
         /// <param name="silentInstall">If true, don't run the app once install completes.</param>
+        /// <param name="progress">A Observer which can be used to report Progress - 
+        /// will return values from 0-100 and Complete, or Throw</param>
         /// <returns>Completion</returns>
-        Task FullInstall(bool silentInstall);
+        Task FullInstall(bool silentInstall, Action<int> progress = null);
 
         /// <summary>
         /// Completely uninstalls the targeted app
@@ -77,7 +85,7 @@ namespace Squirrel
         /// executable</param>
         /// <returns>The running version, or null if this is not a Squirrel
         /// installed app (i.e. you're running from VS)</returns>
-        Version CurrentlyInstalledVersion(string executable = null);
+        SemanticVersion CurrentlyInstalledVersion(string executable = null);
 
         /// <summary>
         /// Creates an entry in Programs and Features based on the currently 
@@ -112,7 +120,9 @@ namespace Squirrel
         /// <param name="locations">The locations to install the shortcut</param>
         /// <param name="updateOnly">Set to false during initial install, true 
         /// during app update.</param>
-        void CreateShortcutsForExecutable(string exeName, ShortcutLocation locations, bool updateOnly);
+        /// <param name="programArguments">The arguments to code into the shortcut</param>
+        /// <param name="icon">The shortcut icon</param>
+        void CreateShortcutsForExecutable(string exeName, ShortcutLocation locations, bool updateOnly, string programArguments, string icon);
 
         /// <summary>
         /// Removes shortcuts created by CreateShortcutsForExecutable
@@ -169,7 +179,8 @@ namespace Squirrel
             This.CreateShortcutsForExecutable(Path.GetFileName(
                 Assembly.GetEntryAssembly().Location),
                 ShortcutLocation.Desktop | ShortcutLocation.StartMenu, 
-                Environment.CommandLine.Contains("squirrel-install") == false);
+                Environment.CommandLine.Contains("squirrel-install") == false,
+                null, null);
         }
 
         public static void RemoveShortcutForThisExe(this IUpdateManager This)
